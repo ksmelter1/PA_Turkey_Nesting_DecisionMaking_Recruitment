@@ -1,0 +1,262 @@
+---
+title: "1.1_Download_Elevation_And_Create_Rasters_sf_terra_2024.R"
+output: html_document
+date: "2024-08-10"
+---
+
+---
+Title:    Disease Modeling Software 
+          Script "1.1_Download_Elevation_And_Create_Rasters" for Pennsylvania, USA
+
+Authors:  Kristin J. Bondo, 
+          Diego Montecino-Latorre, 
+          W. David Walter
+         
+Date:    August 2024
+
+Disclaimer: Any use of trade, firm, or product names is for descriptive purposes 
+            only and does not imply endorsement by the U.S. Government.
+
+Description: This script allows the user to download elevation for the study area using a shapefile. In this case, we download elevation data for the entire state of Pennsylvania and obtain a raster of 10 m resolution using the FedData Package. A raster for elevation with 5 km resolution is then built by aggregating the raster to 500 m resolution and then resampling and reprojecting it to a template grid of the study area that has 5km resolution. Outputs include an extracted elevation raster with 10 m resolution for the state of Pennsylvania from the FedData Package and a raster of elevation with 5km resolution, which is the one that will be used in subsequent scripts to extract the spatial covariates for the data and to make predictions in the INLA models at locations that were not sampled. To use the FedData Package, be sure to download the one from GitHub and make sure that Version 3.0 is installed. 
+
+Save the downloaded files to a location with a large amount of storage space because these files are large when downloaded over large extents.
+
+This code was written under: 
+R version 4.3.0 (2023-04-21) -- "Already Tomorrow"
+Copyright (C) 2023 The R Foundation for Statistical Computing
+Platform: x86_64-apple-darwin20 (64-bit)
+
+---
+
+Set-up: Set the working directory on your computer to the location that you would like to store the downloaded files, generate the dataset, and run the models.
+```{r}
+#For mac
+mac_path <- "/your_working_directory"  #Change code to the working directory on your computer
+set_working_directory(mac_path)
+
+#For PC
+pc_path <- "C:/your_working_directory" #Change code to the working directory on your computer
+set_working_directory(pc_path)
+
+# Define working directory
+working.directory <- getwd() # Set working directory
+
+```
+
+Set-up: If not done previously, run the project set-up code below to make folders and sub-folders to organize and save data in subsequent scripts.
+```{r}
+
+# 0/ Specify overall project folder "Spatial_Disease_Modeling" to contain project files                                           
+dir.create(paste0(getwd(),"/Spatial_Disease_Modeling"))
+
+# 1/ Make a sub-folder "1_Raw_Data" to store downloaded raw spatial data 
+folder1 <- "Spatial_Disease_Modeling/1_Raw_Data"
+dir.create(file.path(working.directory, folder1), recursive=TRUE)
+
+# 2/ Make a sub-folder "2_Spatial_Data_Ready_To_Use" to store the rasters with desired resolution that will be used in the modeling #
+folder2 <- "Spatial_Disease_Modeling/2_Spatial_Data_Ready_To_Use"
+dir.create(file.path(working.directory, folder2), recursive=TRUE)
+
+# 3/ Make a sub-folder "3_Data_Set_Prep" to store a copy of the cleaned data and extracted spatial data to attach to the dataset #
+folder3 <- "Spatial_Disease_Modeling/3_Data_Set_Prep"
+dir.create(file.path(working.directory, folder3), recursive=TRUE)
+
+# 4/ Make a sub-folder "4_Run_INLA_Model" to store saved output of INLA models #
+folder4 <- "Spatial_Disease_Modeling/4_Run_INLA_Models"
+dir.create(file.path(working.directory, folder4), recursive=TRUE)
+
+# 5/ Make a sub-folder "5_Predict_Surface" to store saved output of INLA models #
+folder5 <- "Spatial_Disease_Modeling/5_Predict_Surface"
+dir.create(file.path(working.directory, folder5), recursive=TRUE)
+
+# 6/ Make a sub-folder "6_Visualize_in_Shiny" to store saved output of INLA models #
+folder6 <- "Spatial_Disease_Modeling/6_Visualize_in_Shiny"
+dir.create(file.path(working.directory, folder6), recursive=TRUE)
+
+```
+
+Set-Up: Check to see if required libraries are installed. If not, they will be installed.
+```{r}
+
+# List of required libraries
+required_libraries <- c( "sf", "terra", "tigris")
+
+# Function to check and install missing libraries
+install_if_missing <- function(libraries) {
+  for (lib in libraries) {
+    if (!require(lib, character.only = TRUE)) {
+      install.packages(lib, dependencies = TRUE)
+    }
+  }
+}
+
+# Install and load sf, terra, and tigris libraries if not installed
+install_if_missing(required_libraries)
+
+# Download Version 3.0 of the FedData Package and devtools from GitHub if not installed
+remotes::install_github(repo = "r-lib/devtools", 
+                              dependencies = TRUE, 
+                              upgrade = TRUE)
+
+devtools::install_github(repo = "r-lib/devtools",
+                              dependencies = TRUE,
+                              upgrade = TRUE)
+
+#Install FedData package using devtools
+install.packages("devtools")
+devtools::install_github("ropensci/FedData")
+
+```
+
+Set-up: Load required packages once are already installed on your machine.
+```{r}
+
+library("sf")
+library("terra")
+library("tigris")
+library("FedData") #Be sure to use Version 3.0 or greater from GitHub
+
+sessionInfo() #Code to check whether Version 3.0 or greater of FedData is installed. If not correct version, then install from code above.
+
+```
+
+1) Create a template of the state of Pennsylvania with 5 km resolution and use this shapefile to download the elevation data in the next step. 
+```{r}
+
+# Download the shapefile of the study area, which is the state of Pennsylvania
+states <- tigris::states(resolution = "5m",
+                         class = "sf",
+                         progress_bar = FALSE)
+
+PA=states[states$STUSPS=="PA",]
+
+
+# Transform coordinate system to state plane
+PA <- st_transform(PA, st_crs(6562))
+
+template = st_buffer(st_transform(PA, st_crs(6562)), dist = 10000) # extend template boundary 10 km out from PA border
+
+plot(st_geometry(template))
+
+#Code to save the template of the study area as a shapefile 
+#st_write(obj=template, dsn=".", layer = "template", driver="ESRI Shapefile")   
+                         
+```
+
+2) Using the FedData Package, download raw elevation (ned) files for the state of Pennsylvania using a shapefile of the study area and mosaic the tiles to make one raster with 10 m resolution.    
+```{r}
+
+# Create a sub-folder to download raw and extracted elevation spatial data
+sub_folder4 <- "Spatial_Disease_Modeling/1_Raw_Data/Elev_Raw"
+dir.create(file.path(working.directory, sub_folder4))
+
+# Download elevation raster from the FedData package with 30 m resolution 
+Elev <- get_ned(template=template, 
+                label = 'Elev',
+                res = "13", # desired resolution; "13" indicates the 1/3 arc-second dataset
+                force.redo = T
+)
+        
+# Write the raster to disk
+writeRaster(
+  Elev,
+  file.path(working.directory, sub_folder4, "Elev_NED13.tif"),
+  filetype = 'GTiff',
+  datatype = 'INT2S',
+  overwrite = TRUE
+)
+
+
+```
+
+3)  Create a 5km elevation raster of the study area using the template grid of the study area, which has 5 km resolution. 
+
+3a) First create raster of the template of the study area generated from Step 1 with the specified resolution and state plane NAD83 projection.
+```{r}
+
+# Chosen resolution:
+resolution=5000
+
+#Extent of template
+ex <- as.vector(ext(template))
+
+#Raster and Terra packages generate rasters differently. Raster adjusts ymin whereas terra adjusts ymax. Both adjust xmax. We calculate the extent to be same to how Raster package calculates it.
+
+# Adjust xmax as both Raster and Terra Packages adjust
+ncols <- (ex[2] - ex[1]) / resolution
+ncols <- floor(ncols)  # Ensure whole number of columns
+adjusted_xmax <- ex[1] + (ncols * resolution)  # Adjust xmax
+
+# Adjust ymin as Raster package adjusts
+nrows_raster <- (ex[4] - ex[3]) / resolution
+nrows_raster <- floor(nrows_raster)  # Ensure whole number of rows
+adjusted_ymin_raster <- ex[4] - (nrows_raster * resolution)  # Adjust ymin
+
+#Generate raster to be same extent as raster package
+grid.template <- rast(ext(ex[1], adjusted_xmax, adjusted_ymin_raster, ex[4]), 
+                      res = resolution,
+                      crs = "EPSG:6562") # nad83.2011.pa.north
+
+#Generate raster using default method used by Terra package
+#grid.template <-  rast(ext(template), 
+                  #res = c(resolution),
+                  #crs = "EPSG:6562") #nad83.2011.pa.north
+
+# Move template grid to a spatial object (before it was a empty raster)
+gridPolygon <- as.polygons(grid.template)
+gridPolygon_sf <- st_as_sf(gridPolygon)
+
+# Subset the grid by the box created around PA. Now template is the gridpolygon 
+template <- st_intersection(gridPolygon_sf, template)
+
+# Add cell ID
+templatelayer=c(1:nrow(template))
+colnames(template)[1]="cell_number"
+nrow(template) # 5546 cells.  
+
+# Check point: plot the template, PA
+plot(st_geometry(template))
+plot(st_geometry(st_transform(PA, st_crs(6562))), add=T, border="red", lwd=2)
+
+```
+
+3b) Aggregate raster in cells of 500 m resolution. This step is recommended by the author of ProjectRaster when merging cells that are too large           compared to the initial resolution (10 m versus the target of 5 km). Then reproject raster and mask it to template grid with 5 km resolution to        generate elevation raster with 5 km resolution. Write rasters to save them.
+```{r}
+
+# Convert Raster to SpatRaster
+Elev <- rast(Elev)
+
+# Aggregate raster in cells of 500 m resolution
+elev.500m=aggregate(Elev, fact=50, fun="mean")
+elev.500m
+plot(elev.500m)
+
+# Reproject raster as the template grid with 5 km resolution to get an elevation raster with 5 km resolution   
+elev.repro.5km=project(elev.500m, grid.template, method='bilinear')
+
+# Mask it to the study area
+elev.repro.5km=mask(elev.repro.5km, template)
+
+# Create a sub-folder to store the elevation raster with 5 km resolution
+sub_folder5 <- "Spatial_Disease_Modeling/2_Spatial_Data_Ready_To_Use/Elevation_5KM_Rasters"
+dir.create(file.path(working.directory, sub_folder5), recursive = TRUE)
+
+# Save the final elevation raster for the study area with 5 km resolution
+writeRaster(elev.repro.5km, file.path(working.directory, sub_folder5, "elev_repro_5km.tif"), overwrite=T) 
+
+# Save the elevation raster to the predictions folder to make predictions
+writeRaster(elev.repro.5km, file.path(working.directory, "Spatial_Disease_Modeling/5_Predict_Surface/elev_repro_5km.tif"))
+
+# Save the elevation raster to the Shiny App folder to visualize
+writeRaster(elev.repro.5km, file.path(working.directory, "Spatial_Disease_Modeling/6_Visualize_in_Shiny/elev_repro_5km.tif"))
+
+```
+
+# Check point: Plot 5 km resolution elevation raster with the template grid of the study area. 
+```{r}
+
+plot(elev.repro.5km)
+plot(template, add = T)
+plot(st_transform(st_as_sf(PA), st_crs(6562)), add=T, col="red")
+
+```

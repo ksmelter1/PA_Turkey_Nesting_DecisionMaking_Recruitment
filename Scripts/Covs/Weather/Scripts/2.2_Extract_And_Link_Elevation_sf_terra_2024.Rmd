@@ -1,0 +1,134 @@
+---
+title: "2.2_Extract_And_Link_Elevation_sf_terra_2024"
+output: html_document
+date: "2024-08-11"
+---
+
+Title:    Disease Modeling Software 
+          Script "2.2_Extract_And_Link_Elevation_Data_sf_terra" for Pennsylvania, USA
+
+Authors:  Kristin J. Bondo, 
+          Diego Montecino-Latorre, 
+          W. David Walter
+         
+Date:    August 2024
+
+Disclaimer: Any use of trade, firm, or product names is for descriptive purposes 
+            only and does not imply endorsement by the U.S. Government.
+
+Description: This script allows the user to extract an elevation value at 5 km resolution for each observation in the dataset. Output from this script includes 
+files with the extracted elevation value that correspond to each observation in the dataset. These values will be used in a subsquent script to link the extracted 
+elevation values to each observation in the dataset. 
+
+This code was written under 
+R version 4.3.0 (2023-04-21) -- "Already Tomorrow"
+Copyright (C) 2023 The R Foundation for Statistical Computing
+Platform: x86_64-apple-darwin20 (64-bit)
+
+---
+
+Set-up: Set the working directory on your computer to the location that you would like to store the downloaded files, generate the dataset, and run the models.
+```{r}
+
+#For mac
+mac_path <- "/your_working_directory"  #Change code to the working directory on your computer
+set_working_directory(mac_path)
+
+#For PC
+pc_path <- "C:/your_working_directory" #Change code to the working directory on your computer
+set_working_directory(pc_path)
+
+# Define working directory
+working.directory <- getwd() # Set working directory
+
+```
+
+Set-up: If not done previously, run the project set-up code below to make folders and sub-folders to organize and save data in subsequent scripts.
+```{r}
+
+# 0/ Specify overall project folder "Spatial_Disease_Modeling" to contain project files                                           
+dir.create(paste0(getwd(),"/Spatial_Disease_Modeling"))
+
+# 1/ Make a sub-folder "1_Raw_Data" to store downloaded raw spatial data 
+folder1 <- "Spatial_Disease_Modeling/1_Raw_Data"
+dir.create(file.path(working.directory, folder1), recursive=TRUE)
+
+# 2/ Make a sub-folder "2_Spatial_Data_Ready_To_Use" to store the rasters with desired resolution that will be used in the modeling #
+folder2 <- "Spatial_Disease_Modeling/2_Spatial_Data_Ready_To_Use"
+dir.create(file.path(working.directory, folder2), recursive=TRUE)
+
+# 3/ Make a sub-folder "3_Data_Set_Prep" to store a copy of the cleaned data and extracted spatial data to attach to the dataset #
+folder3 <- "Spatial_Disease_Modeling/3_Data_Set_Prep"
+dir.create(file.path(working.directory, folder3), recursive=TRUE)
+
+# 4/ Make a sub-folder "4_Run_INLA_Model" to store saved output of INLA models #
+folder4 <- "Spatial_Disease_Modeling/4_Run_INLA_Models"
+dir.create(file.path(working.directory, folder4), recursive=TRUE)
+
+# 5/ Make a sub-folder "5_Predict_Surface" to store saved output of INLA models #
+folder5 <- "Spatial_Disease_Modeling/5_Predict_Surface"
+dir.create(file.path(working.directory, folder5), recursive=TRUE)
+
+# 6/ Make a sub-folder "6_Visualize_in_Shiny" to store saved output of INLA models #
+folder6 <- "Spatial_Disease_Modeling/6_Visualize_in_Shiny"
+dir.create(file.path(working.directory, folder6), recursive=TRUE)
+
+```
+
+Set-Up: Check to see if required libraries are installed. If not, they will be installed.
+```{r}
+
+# List of required libraries
+required_libraries <- c("sf", "terra")
+
+# Install libraries
+install_if_missing(required_libraries)
+
+```
+
+Set-up: Load packages after they are installed on your machine.
+```{r}
+
+library("sf")
+library("terra")
+
+```
+
+1) Extract the elevation data at 5 km resolution for each observation in the dataset
+```{r}
+
+# Import cleaned data set
+base_dir <- "Spatial_Disease_Modeling/3_Data_Set_Prep" # Specify location dataset is located
+file_name <- "WNV_data_cleaned.rds"  # Define the file name
+file_path <- file.path(working.directory, base_dir, file_name) # Construct the full file path with working directory included
+traps.res <- readRDS(file_path) # Read in cleaned dataset
+
+# Define coordinate system of data
+crs.ll <- 4326 
+
+#Convert to sf object define coordinate system
+traps.res=st_as_sf(traps.res, coords = c("LONGITUDE","LATITUDE"), crs = crs.ll)
+
+# Open elevation 5 km raster
+elev_dir <- "Spatial_Disease_Modeling/2_Spatial_Data_Ready_To_Use/Elevation_5KM_Rasters" # Specify location raster is located
+file_name <- "elev_repro_5km.tif"  # Define the file name
+file_path <- file.path(working.directory, elev_dir, file_name) # Construct the full file path with working directory included
+elev.5km=rast(file_path) # Read in cleaned dataset
+
+# Extract elevation data for each trap 
+elevation_per_trap=terra::extract(elev.5km, st_transform(traps.res, 
+                                                         crs = st_crs(elev.5km)), df=T, sp=F) # reproject dataset to be the same as elevation raster
+
+# Assign unique id value of each observation in dataset to link spatial data  
+elevation_per_trap$trap_id=traps.res$Trap_ID 
+
+# Assign date of each observation in dataset to ensure it is linking correctly
+elevation_per_trap$COLLECTED=traps.res$COLLECTED
+
+# Save the file to link data to final dataset
+file_name <- "elevation_all_traps.rds" # Specify file name for saved file
+output_file <- file.path(working.directory, base_dir, file_name) # Construct the full path for the output file
+saveRDS(elevation_per_trap, output_file) # Save the RDS file
+
+```
+

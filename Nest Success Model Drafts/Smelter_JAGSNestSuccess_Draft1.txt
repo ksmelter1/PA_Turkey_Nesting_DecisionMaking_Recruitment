@@ -1,0 +1,72 @@
+
+#################################################################
+## Female Wild Turkey Nest Survival Model in Pennsylvania USA ##
+#################################################################
+
+# Kyle J. Smelter 10/25/24
+# Purpose: This model Estimates daily nest survival of wild turkeys at multiple scales as a function of nest-site metrics, landscape-level variables, and individual covariates using JAGS
+
+
+
+modelstring.nestsuccess.nestsuccess_covs_RE = 
+model {
+for (i in 1: n.ind) {
+for (t in f[i]: n.occasions-1) {
+logit(s[i,t]) <- beta0 + beta.propforest*propforest[i] + beta.propdeveloped*propdeveloped[i] + beta.propagriculture*propagriculture[i] + beta.visob * visualobstruction[i] + beta.grassforb*grassforb[i] + beta.woody*percentwoody[i] + 
+		beta.basal*basalarea[i] + beta.dailyprecip*dailyprecipitation[i,t] + beta.dailymintemp*minimumtemp[i,t] + beta.precipanomaly*precipanomaly[i,t] + beta.tempanomaly*tempanomaly[i,t] + 
+		beta.cumdistancetrav*cumulativedistancetraveled[i] + beta.timespent*timespentoffnest[i] + beta.bodymass*bodymassatcapture[i] + beta.lpdv*LPDV[i] + beta.rev*REV[i] + beta.coinfection*coinfection[i]+ 
+		beta.age*henage[i] + alpha[BirdID[i]]
+	} #i
+} #t
+
+# Priors
+beta.propforest ~ dnorm(0,.0001) # Proportion Forest
+beta.propdeveloped ~ dnorm(0,.0001) # Proportion Developed
+beta.propagriculture ~ dnorm(0,.0001) # Proportion Agriculture
+beta.visob~ dnorm(0,.0001) # Visual Obstruction (Density of Understory Vegetation)
+beta.grassforb~ dnorm(0,.0001) # Percent Grass Forb
+beta.woody~ dnorm(0,.0001) # Percent Woody
+beta.basal~ dnorm(0,.0001) # Basal Area
+beta.dailyprecip~ dnorm(0,.0001) # Daily Precipitation
+beta.dailymintemp~ dnorm(0,.0001) # Daily Minimum Temperature
+beta.precipanomaly~ dnorm(0,.0001) # Precipitation Anomaly
+beta.tempanomaly~ dnorm(0,.0001) # Temperature Anomaly
+beta.cumdistancetrav~ dnorm(0,.0001) # Cumulative Distance Traveled During Incubation 
+beta.timespent~ dnorm(0,.0001) # Time Spent Off Nest
+beta.bodymass~ dnorm(0,.0001) # Body Mass at Capture
+beta.lpdv~ dnorm(0,.0001) # LPDV Infection Status
+beta.rev~ dnorm(0,.0001) # REV Infection Status
+beta.coinfection~ dnorm(0,.0001) # Coinfection Status of LPDV and REV
+beta.henage~ dnorm(0,.0001) # Hen Age
+
+# Individual random effect (BirdID)
+# Account for indvidual variation across years to test for the dominant hen theory
+for (k in 1:K){
+   alpha[k]~dnorm(0,0.000001)
+  }
+
+#Derived Parameters
+# Daily Nest Survival (I don't think this is correct either)
+for (u in 1:K) {
+	for (t in 1:(n.occasions-1)){
+		logit(s[i,t]) <- beta0 + beta.propforest*propforest[i]beta.propdeveloped*propdeveloped[i] + beta.propagriculture*propagriculture[i] + beta.visob * visualobstruction[i] + beta.grassforb*grassforb[i] + 
+		beta.woody*percentwoody[i] + beta.basal*basalarea[i] + beta.dailyprecip*dailyprecipitation[i,t] + beta.dailymintemp*minimumtemp[i,t] + beta.precipanomaly*precipanomaly[i,t] + beta.tempanomaly*tempanomaly[i,t] +
+ 		beta.cumdistancetrav*cumulativedistancetraveled[i] + beta.timespent*timespentoffnest[i] + beta.bodymass*bodymassatcapture[i] + beta.lpdv*LPDV[i] + beta.rev*REV[i] + beta.coinfection*coinfection[i]+ beta.age*henage[i] + alpha[BirdID[i]]
+	} #i
+} #t
+
+# Likelihood 
+# Not sure how to write this and left this the same as Duane's class project for now
+for (i in 1:nind){
+   # Define latent state at first capture
+   z[i,f[i]] <- 1
+   for (t in (f[i]+1):n.occasions){
+      # State process
+      z[i,t] ~ dbern(mu1[i,t])
+      mu1[i,t] <- s[i,t-1] * z[i,t-1]
+      # Observation process
+      y[i,t] ~ dbern(mu2[i,t])
+      mu2[i,t] <- r[i,t-1] * (z[i,t-1] - z[i,t])
+      } #t
+   } #i
+}

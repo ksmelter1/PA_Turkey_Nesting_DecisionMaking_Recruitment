@@ -1,0 +1,345 @@
+---
+title: "2.4_Extract_And_Link_NDWI_sf_terra_2024"
+output: html_document
+date: "2024-08-11"
+---
+
+Title:    Disease Modeling Software 
+          Script "2.4_Extract_And_Link_NDWI_Data_sf_terra_PC" for Pennsylvania, USA
+
+Authors:  Kristin J. Bondo, 
+          Diego Montecino-Latorre, 
+          W. David Walter
+         
+Date:    August 2024
+
+Disclaimer: Any use of trade, firm, or product names is for descriptive purposes 
+            only and does not imply endorsement by the U.S. Government.
+
+Description: This script allows the user to extract NDWI values at 5 km resolution for each observation in the dataset for a specified period of weeks prior to when each observation in the dataset were recorded. Output from this script includes files with the extracted NDWI value that corresponds to each observation in the dataset. These 
+values will be used in a subsquent script to link the extracted elevation values to each observation in the dataset. 
+
+This code was written under 
+R version 4.3.0 (2023-04-21) -- "Already Tomorrow"
+Copyright (C) 2023 The R Foundation for Statistical Computing
+Platform: x86_64-apple-darwin20 (64-bit)
+---
+
+Set-up: Set the working directory on your computer to the location that you would like to store the downloaded files, generate the dataset, and run the models.
+```{r}
+
+#For mac
+mac_path <- "/your_working_directory"  #Change code to the working directory on your computer
+set_working_directory(mac_path)
+
+#For PC
+pc_path <- "C:/your_working_directory" #Change code to the working directory on your computer
+set_working_directory(pc_path)
+
+# Define working directory
+working.directory <- getwd() # Set working directory
+
+```
+
+Set-up: If not done previously, run the project set-up code below to make folders and sub-folders to organize and save data in subsequent scripts.
+```{r}
+
+# 0/ Specify overall project folder "Spatial_Disease_Modeling" to contain project files                                           
+dir.create(paste0(getwd(),"/Spatial_Disease_Modeling"))
+
+# 1/ Make a sub-folder "1_Raw_Data" to store downloaded raw spatial data 
+folder1 <- "Spatial_Disease_Modeling/1_Raw_Data"
+dir.create(file.path(working.directory, folder1), recursive=TRUE)
+
+# 2/ Make a sub-folder "2_Spatial_Data_Ready_To_Use" to store the rasters with desired resolution that will be used in the modeling #
+folder2 <- "Spatial_Disease_Modeling/2_Spatial_Data_Ready_To_Use"
+dir.create(file.path(working.directory, folder2), recursive=TRUE)
+
+# 3/ Make a sub-folder "3_Data_Set_Prep" to store a copy of the cleaned data and extracted spatial data to attach to the dataset #
+folder3 <- "Spatial_Disease_Modeling/3_Data_Set_Prep"
+dir.create(file.path(working.directory, folder3), recursive=TRUE)
+
+# 4/ Make a sub-folder "4_Run_INLA_Model" to store saved output of INLA models #
+folder4 <- "Spatial_Disease_Modeling/4_Run_INLA_Models"
+dir.create(file.path(working.directory, folder4), recursive=TRUE)
+
+# 5/ Make a sub-folder "5_Predict_Surface" to store saved output of INLA models #
+folder5 <- "Spatial_Disease_Modeling/5_Predict_Surface"
+dir.create(file.path(working.directory, folder5), recursive=TRUE)
+
+# 6/ Make a sub-folder "6_Visualize_in_Shiny" to store saved output of INLA models #
+folder6 <- "Spatial_Disease_Modeling/6_Visualize_in_Shiny"
+dir.create(file.path(working.directory, folder6), recursive=TRUE)
+
+```
+
+Set-Up: Check to see if required libraries are installed. If not, they will be installed.
+```{r}
+
+# List of required libraries
+required_libraries <- c("foreach", "fasterize", "stringr", "lubridate", "sf", "terra")
+
+# Function to check and install missing libraries
+install_if_missing <- function(libraries) {
+  for (lib in libraries) {
+    if (!require(lib, character.only = TRUE)) {
+      install.packages(lib, dependencies = TRUE)
+    }
+  }
+}
+
+# Install libraries
+install_if_missing(required_libraries)
+
+```
+
+Set-up: Load packages after they are installed on your machine.
+```{r}
+
+library("foreach")
+library("fasterize")
+library("stringr")
+library("lubridate")
+library("sf")
+library("terra")
+
+```
+
+Set-up: Set the working directory on your computer to the location that you would like to store the downloaded files, generate the dataset, and run the models.
+```{r}
+
+#For mac
+mac_path <- "/your_working_directory"  #Change code to the working directory on your computer
+set_working_directory(mac_path)
+
+#For PC
+pc_path <- "C:/your_working_directory" #Change code to the working directory on your computer
+set_working_directory(pc_path)
+
+# Define working directory
+working.directory <- getwd() # Set working directory
+
+```
+
+Set-up: If not done previously, run the project set-up code below to make folders and sub-folders to organize and save data in subsequent scripts.
+```{r}
+
+# 0/ Specify overall project folder "Spatial_Disease_Modeling" to contain project files                                           
+dir.create(paste0(getwd(),"/Spatial_Disease_Modeling"))
+
+# 1/ Make a sub-folder "1_Raw_Data" to store downloaded raw spatial data 
+folder1 <- "Spatial_Disease_Modeling/1_Raw_Data"
+dir.create(file.path(working.directory, folder1), recursive=TRUE)
+
+# 2/ Make a sub-folder "2_Spatial_Data_Ready_To_Use" to store the rasters with desired resolution that will be used in the modeling #
+folder2 <- "Spatial_Disease_Modeling/2_Spatial_Data_Ready_To_Use"
+dir.create(file.path(working.directory, folder2), recursive=TRUE)
+
+# 3/ Make a sub-folder "3_Data_Set_Prep" to store a copy of the cleaned data and extracted spatial data to attach to the dataset #
+folder3 <- "Spatial_Disease_Modeling/3_Data_Set_Prep"
+dir.create(file.path(working.directory, folder3), recursive=TRUE)
+
+# 4/ Make a sub-folder "4_Run_INLA_Model" to store saved output of INLA models #
+folder4 <- "Spatial_Disease_Modeling/4_Run_INLA_Models"
+dir.create(file.path(working.directory, folder4), recursive=TRUE)
+
+# 5/ Make a sub-folder "5_Predict_Surface" to store saved output of INLA models #
+folder5 <- "Spatial_Disease_Modeling/5_Predict_Surface"
+dir.create(file.path(working.directory, folder5), recursive=TRUE)
+
+# 6/ Make a sub-folder "6_Visualize_in_Shiny" to store saved output of INLA models #
+folder6 <- "Spatial_Disease_Modeling/6_Visualize_in_Shiny"
+dir.create(file.path(working.directory, folder6), recursive=TRUE)
+
+```
+
+Set-Up: Check to see if required libraries are installed. If not, they will be installed.
+```{r}
+
+# List of required libraries
+required_libraries <- c("foreach", "fasterize", "stringr", "lubridate", "sf", "terra")
+
+# Function to check and install missing libraries
+install_if_missing <- function(libraries) {
+  for (lib in libraries) {
+    if (!require(lib, character.only = TRUE)) {
+      install.packages(lib, dependencies = TRUE)
+    }
+  }
+}
+
+# Install libraries
+install_if_missing(required_libraries)
+
+```
+
+Set-up: Load packages after they are installed on your machine.
+```{r}
+
+library("foreach")
+library("fasterize")
+library("stringr")
+library("lubridate")
+library("sf")
+library("terra")
+
+```
+
+1) Read in the cleaned West Nile virus dataset and account for leap years when linking the Daymet data  
+```{r}
+
+# Import cleaned data set
+base_dir <- "Spatial_Disease_Modeling/3_Data_Set_Prep" # Specify location dataset is located
+file_name <- "WNV_data_cleaned.rds"  # Define the file name
+file_path <- file.path(working.directory, base_dir, file_name) # Construct the full file path with working directory included
+traps.res <- readRDS(file_path) # Read in file
+
+# Shift data by leap years 
+traps.res$week=week(traps.res$COLLECTED) 
+traps.res$week[traps.res$week==53]=52 # correcting for extra week in leap years
+
+# Correct data for day
+traps.res$day=yday(traps.res$COLLECTED) # this will shift by one day in leap years. 
+
+# Make column for year
+traps.res$year=year(traps.res$COLLECTED)
+
+# Make column for month
+traps.res$month=month(traps.res$COLLECTED)
+
+# Make "days since" column to correct Daymet data for leap years since January 1, 2017. 
+traps.res$day[leap_year(traps.res$COLLECTED)]=traps.res$day[
+  leap_year(traps.res$COLLECTED)]-1 
+
+
+traps.res$days.since=difftime(as.Date(paste0(day(traps.res$COLLECTED), "/",   # Dates
+                                        traps.res$month, "/",
+                                        traps.res$year), "%d/%m/%Y"),
+                         as.Date("31/12/2016","%d/%m/%Y"), # Use Jan 1st 2017 since this was the first year the Daymet data were downloaded
+                         units="days") # unit of time
+
+leap.years=unique(year(traps.res$COLLECTED)[leap_year(traps.res$COLLECTED)])
+
+# discounting 1 for the observations since 2020
+traps.res$days.since=traps.res$days.since-1
+
+#change the class of days.since
+traps.res$days.since=as.numeric(traps.res$days.since)
+
+```
+
+2) Convert dataset to sf object and project dataset to be the NDWI data
+```{r}
+
+# Define the CRS codes
+crs.ll <- 4326 # WGS84 (latitude/longitude)
+nad83.2011.pa.north <- 6562 # # NAD83 / Pennsylvania North
+
+#Convert to sf object
+traps.res1=st_as_sf(traps.res, coords = c("LONGITUDE","LATITUDE"), crs = crs.ll)
+
+#Project the trap data as the Daymet 5km rasters
+traps.res=st_transform(traps.res1, crs = nad83.2011.pa.north)
+
+```
+
+3) For each observation in dataset, extract the NDWI data for each week (8 days) from 2017-2020.
+```{r}
+
+# Define the working directory and base directory
+ndwi_directory <- "Spatial_Disease_Modeling/2_Spatial_Data_Ready_To_Use/NDWI_5KM_Rasters"
+
+# Construct the full path for where the files are located
+ndwi_base_dir <- file.path(working.directory, ndwi_directory)
+
+# List and filter files
+all_files <- list.files(ndwi_base_dir, full.names = TRUE)
+filtered_files <- all_files[grepl("ndwi_5km_b4_b6_", all_files)]
+sorted_files <- str_sort(filtered_files, numeric = TRUE)
+
+# Load rasters using lapply
+ndwi.5k.full <- lapply(sorted_files, function(x) rast(x))
+
+
+# Conduct the extraction for the traps (This step takes a while)
+
+out=lapply(c(1:length(ndwi.5k.full)), function(x)
+  
+  terra::extract(ndwi.5k.full[[x]], traps.res, df=T))
+
+# Change the list of data per day to a matrix
+test=do.call(cbind, lapply(out, function(x) x[,2]))
+
+# Then change the matrix to dataframe
+ndwi=data.frame(test)
+
+# Specify column names as weeks since week 1 2017
+colnames(ndwi)=paste0("week", c(1:length(ndwi.5k.full))) 
+
+# Assign unique id value of each observation in dataset to link spatial data  
+ndwi$Trap_ID=traps.res$Trap_ID 
+
+# Assign date of each observation in dataset to ensure it is linking correctly
+ndwi$COLLECTED=traps.res$COLLECTED
+
+# Save extracted data
+#file_name <- "ndwi_all_traps.RDS" # Specify file name for saved file
+#output_file <- file.path(working.directory, base_dir, file_name) # Construct the full path for the output file
+#saveRDS(ndwi, output_file) # Save the RDS file
+
+```
+
+4) Assign the NDWI value for each observation in the dataset based on a specified range of weeks prior to when each observation was collected. 
+```{r}
+
+# Extract data for a range of dates (time-lag) between x and y days prior to sampling. 
+
+weeks.before.trapping <- c(1, 17)  # A time-lag of 1-17 weeks prior to the collection date is used. 
+                                   # the first element in this vector is the closest week to the week the trap was set. 
+                                   # the last element in this vector is the furthest week to the week the trap was set
+
+# List and filter files
+paths <- list.files(ndwi_base_dir, pattern = "ndwi_5km_b4_b6_", full.names = TRUE)[1:185]
+
+# Names of paths between years 2017 and 2020
+names.ndwi.weekly.all.years <- basename(paths)
+names.ndwi.weekly.all.years <- gsub("\\.tif$", "", names.ndwi.weekly.all.years)
+
+day.ndwi <- substr(names.ndwi.weekly.all.years, start = 20, stop = 22)
+year.ndwi <- substr(names.ndwi.weekly.all.years, start = 16, stop = 19)    
+
+# This code calculates the mean of the mean NDWI values for weeks 1 through 17 prior to trapping in the 
+# 5 km grid cell that each trap is located, so that each trap will have one value for the variable.
+
+ndwi.within.weeks.before.trapping=
+  
+  lapply(c(1:nrow(traps.res)), function(x)
+    
+    # get the mean 
+    mean(
+      
+      as.numeric(ndwi[ndwi$Trap_ID==traps.res$Trap_ID[x], 
+                      
+                      c(
+                        which.min(
+                          ifelse(
+                            as.Date(ndwi$COLLECTED[x]) - 
+                              as.Date(strptime(paste(year.ndwi, day.ndwi), format="%Y %j"))<0,100,
+                            as.Date(ndwi$COLLECTED[x]) - 
+                              as.Date(strptime(paste(year.ndwi, day.ndwi), format="%Y %j"))))-weeks.before.trapping[2]):
+                        
+                        c(
+                          which.min(
+                            ifelse(
+                              as.Date(ndwi$COLLECTED[x]) - 
+                                as.Date(strptime(paste(year.ndwi, day.ndwi), format="%Y %j"))<0,100,
+                              as.Date(ndwi$COLLECTED[x]) - 
+                                as.Date(strptime(paste(year.ndwi, day.ndwi), format="%Y %j"))))-weeks.before.trapping[1])])))  
+
+
+# Save the file to link data to final dataset
+file_name <- "ndwi_specific_period_all_traps.rds" # Specify file name for saved file
+output_file <- file.path(working.directory, base_dir, file_name) # Construct the full path for the output file
+saveRDS(ndwi.within.weeks.before.trapping, output_file) # Save the RDS file
+
+```

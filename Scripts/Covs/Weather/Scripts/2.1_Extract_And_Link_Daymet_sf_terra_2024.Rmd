@@ -1,0 +1,370 @@
+---
+title: "2.1_Extract_And_Link_Daymet_sf_terra_2024"
+output: html_document
+date: "2024-08-11"
+---
+
+Title:    Disease Modeling Software 
+          Script "2.1_Extract_And_Link_Daymet_Data_sf_terra_PC" for Pennsylvania, USA
+
+Authors:  Kristin J. Bondo, 
+          Diego Montecino-Latorre, 
+          W. David Walter
+         
+Date:     August 2024
+
+Disclaimer: Any use of trade, firm, or product names is for descriptive purposes 
+            only and does not imply endorsement by the U.S. Government.
+
+Description: This script allows the user to extract average daily Daymet values for mean temperature, snow water equivalent, and precipitation at 5 km resolution for each observation for a specified period of days prior to when the observations were recorded. In the first section of the script, the data are corrected for leap years using a date specified by the user to correspond to the date of January 1st of the first year of which spatial data were downloaded for the dataset (2017 in this example). All the observations need the leap year correct because they all were collected after Feb 28th. In the second section of the script, daily Daymet data are extracted for each day and year the spatial data were downloaded. Although all of this extracted data are not needed in this step, it is the fastest way to prepare the spatial data for the next step. In the third section of the script, for each Daymet variable, a specified period of days prior to when the observations were collected is specified (which can be modified by the user), and then the average of the raster values at 5km resolution are calculated and assigned to each observation in the dataset. Output from this script includes files with the extracted Daymet variables that correspond to each observation in the dataset. These values will be used in a subsequent script to link the extracted Daymet values to each observation in the dataset. 
+
+This code was written under 
+R version 4.3.0 (2023-04-21) -- "Already Tomorrow"
+Copyright (C) 2023 The R Foundation for Statistical Computing
+Platform: x86_64-apple-darwin20 (64-bit)
+
+---
+
+Set-up: Set the working directory on your computer to the location that you would like to store the downloaded files, generate the dataset, and run the models.
+```{r}
+
+#For mac
+mac_path <- "/your_working_directory"  #Change code to the working directory on your computer
+set_working_directory(mac_path)
+
+#For PC
+pc_path <- "C:/your_working_directory" #Change code to the working directory on your computer
+set_working_directory(pc_path)
+
+# Define working directory
+working.directory <- getwd() # Set working directory
+
+```
+
+Set-up: If not done previously, run the project set-up code below to make folders and sub-folders to organize and save data in subsequent scripts.
+```{r}
+
+```
+
+Set-Up: Check to see if required libraries are installed. If not, they will be installed.
+```{r}
+
+# List of required libraries
+required_libraries <- c("foreach", "fasterize", "stringr", "lubridate", "sf", "terra")
+
+# Function to check and install missing libraries
+install_if_missing <- function(libraries) {
+  for (lib in libraries) {
+    if (!require(lib, character.only = TRUE)) {
+      install.packages(lib, dependencies = TRUE)
+    }
+  }
+}
+
+# Install libraries
+install_if_missing(required_libraries)
+
+```
+
+Set-up: Load packages after they are installed on your machine.
+```{r}
+
+library("foreach")
+library("fasterize")
+library("stringr")
+library("lubridate")
+library("sf")
+library("terra")
+library("dplyr")
+
+```
+
+1) Read in the cleaned West Nile virus dataset and account for leap years when linking the Daymet data  
+```{r}
+
+# Import cleaned data set
+base_dir <- "Weather_Modeling/3_Data_Set_Prep" # Specify location dataset is located
+  file_name <- "nests_22_23_clean.csv"  # Define the file name
+file_path <- file.path(working.directory, base_dir, file_name) # Construct the full file path with working directory included
+nests.res <- read.csv(file_path) # Read in file
+
+str(nests.res)
+glimpse(nests.res)
+
+#' Clean up issue with zeros in dates column
+nests.res$checkday<-ifelse(nchar(nests.res$checkday)==1,paste(0,nests.res$checkday,sep=""),nests.res$checkday)
+nests.res$checkmo<-ifelse(nchar(nests.res$checkmo)==1,paste(0,nests.res$checkmo,sep=""),nests.res$checkmo)
+
+#' Build df with information we need
+nests.res$checkdate <- paste0(nests.res$checkyr, 
+                                    nests.res$checkmo, 
+                                  nests.res$checkday) 
+
+#' Format timestamps correctly in year, month, day format and create start date column 
+nests.res$date<-as.Date(as.character(nests.res$checkdate),
+                               format="%Y%m%d")
+
+
+# nests.res$days.since=difftime(as.Date(paste0(day(nests.res$checkdate), "/",   # Dates
+#                                         nests.res$checkmo, "/",
+#                                         nests.res$checkyr), "%d/%m/%Y"),
+#                          as.Date("31/12/2016","%d/%m/%Y"), # Use Jan 1st 2017 since this was the first year the Daymet data were downloaded
+#                          units="days") # unit of time
+# 
+# leap.years=unique(year(traps.res$COLLECTED)[leap_year(traps.res$COLLECTED)])
+
+# # discounting 1 for the observations since 2020
+# traps.res$days.since=traps.res$days.since-1
+# 
+# #change the class of days.since
+# traps.res$days.since=as.numeric(traps.res$days.since)
+
+```
+
+2) Convert dataset to sf object and project dataset to be the Daymet data
+```{r}
+
+# # Define the CRS codes
+# crs.ll <- 4326 # WGS84 (latitude/longitude)
+# nad83.2011.pa.north <- 6562 # # NAD83 / Pennsylvania North
+# 
+# #Convert to sf object
+# traps.res1=st_as_sf(traps.res, coords = c("LONGITUDE","LATITUDE"), crs = crs.ll)
+# 
+# #Project the trap data as the Daymet 5km rasters
+# traps.res=st_transform(traps.res1, crs = nad83.2011.pa.north)
+
+#' Create nests.res as a spatial object and then project to Albers
+nests.res <- st_as_sf(nests.res,
+                      coords = c("long_n",
+                                 "lat_n"),
+                                  crs= 4326) %>%
+                                  st_transform(5070)
+
+```
+
+3) For each observation in dataset, extract the daily Daymet data for each day from 2017-2020.
+```{r}
+
+# Define the base directory
+sub_dir <- "Weather_Modeling/2_Spatial_Data_Ready_To_Use/Daymet_5KM_Rasters"
+
+# Construct the full path for the base directory
+full_dir <- file.path(working.directory, sub_dir)
+
+# List files in the directory
+all_files <- list.files(full_dir, full.names = TRUE)
+
+```
+
+3a) Extract mean temperature for all days
+```{r}
+
+# Filter files that match the pattern
+filtered_files <- all_files[grepl("daily_mean_temp_5km_all_PA_day_", all_files)]
+
+# Sort the files numerically by their names
+sorted_files <- str_sort(filtered_files, numeric = TRUE)
+
+# Load the rasters using lapply
+tmean_5k_full <- lapply(sorted_files, function(x) rast(x))
+
+# Conduct the extraction for the observations. (This step takes the longest)
+out=lapply(c(1:length(tmean_5k_full)), function(x)
+  
+  terra::extract(tmean_5k_full[[x]], nests.res, df=T))
+
+# Move the list of data per day to a data frame of data per date (columns) per trap (rows)
+test=do.call(cbind, lapply(out, function(x) x[,2]))
+tmean=data.frame(test) # Change to dataframe
+colnames(tmean)=paste0("day", c(1:length(tmean_5k_full))) # Column names are the days since January first 2017
+
+# Assign unique id value of each observation in dataset to link spatial data  
+tmean$trap_id=traps.res$Trap_ID 
+
+# Assign date of each observation in dataset to ensure it is linking correctly
+tmean$COLLECTED=traps.res$COLLECTED
+
+# Save extracted data
+#file_name <- "tmean_all_days_traps.RDS" # Specify file name for saved file
+#output_file <- file.path(working.directory, base_dir, file_name) # Construct the full path for the output file
+#saveRDS(tmean, output_file) # Save the RDS file
+
+```
+
+3b) Extract daily precipitation for all days
+```{r}
+
+# Filter files that match the pattern
+filtered_files <- all_files[grepl("daily_mean_precip_5km_all_PA_day_", all_files)]
+
+# Sort the files numerically by their names
+sorted_files <- str_sort(filtered_files, numeric = TRUE)
+
+# Load the rasters using lapply
+precip_5k_full <- lapply(sorted_files, function(x) rast(x))
+
+# Conduct the extraction for the observations. (This step takes the longest)
+out=lapply(c(1:length(precip_5k_full)), function(x)
+  
+  terra::extract(precip_5k_full[[x]], traps.res, df=T))
+
+# Move the list of data per day to a data frame of data per date (columns) per trap (rows)
+test=do.call(cbind, lapply(out, function(x) x[,2]))
+precip=data.frame(test) # Change to dataframe
+colnames(precip)=paste0("day", c(1:length(precip_5k_full))) # Column names are the days since January first 2017
+
+# Assign unique id value of each observation in dataset to link spatial data  
+precip$trap_id=traps.res$Trap_ID 
+
+# Assign date of each observation in dataset to ensure it is linking correctly
+precip$COLLECTED=traps.res$COLLECTED
+
+# Save extracted data
+#file_name <- "precip_all_days_traps.RDS" # Specify file name for saved file
+#output_file <- file.path(working.directory, base_dir, file_name) # Construct the full path for the output file
+#saveRDS(precip, output_file) # Save the RDS file
+
+```
+
+3c) Extract daily snow water equivalent for all days
+```{r}
+
+# Filter files that match the pattern
+filtered_files <- all_files[grepl("daily_mean_snow_5km_all_PA_day_", all_files)]
+
+# Sort the files numerically by their names
+sorted_files <- str_sort(filtered_files, numeric = TRUE)
+
+# Load the rasters using lapply
+snow_5k_full <- lapply(sorted_files, function(x) rast(x))
+
+# Conduct the extraction for the observations. (This step takes the longest)
+out=lapply(c(1:length(snow_5k_full)), function(x)
+  
+  terra::extract(snow_5k_full[[x]], traps.res, df=T))
+
+# Move the list of data per day to a data frame of data per date (columns) per trap (rows)
+test=do.call(cbind, lapply(out, function(x) x[,2]))
+snow=data.frame(test) # Change to dataframe
+colnames(snow)=paste0("day", c(1:length(snow_5k_full))) # Column names are the days since January first 2017
+
+# Assign unique id value of each observation in dataset to link spatial data  
+snow$trap_id=traps.res$Trap_ID 
+
+# Assign date of each observation in dataset to ensure it is linking correctly
+snow$COLLECTED=traps.res$COLLECTED
+
+# Save extracted data
+#file_name <- "snow_all_days_traps.RDS" # Specify file name for saved file
+#output_file <- file.path(working.directory, base_dir, file_name) # Construct the full path for the output file
+#saveRDS(snow, output_file) # Save the RDS file
+
+```
+
+4) Calculate the mean of each Daymet variable in the 5km grid cell that each observation was located over a specific range of dates (time-lag) between x and days prior to when the observation was collected. For each Daymet variable considered in the analysis, each observation will have one final value assigned.    
+
+4a) Mean temperature 
+```{r}
+
+# For mean temperature, a time-lag of 3-7 days prior to collection date is used. 
+days.before.trapping=c(3,7) # the first element in this vector is the closest day prior to the day the trap was set. 
+                            # The second element is the furthest day prior to the day the trap was set.
+
+
+# This code will calculate the mean of the mean temperature values for days 3 through 7 prior to trapping in the 
+# 5 km grid cell that each trap is located, so that each trap will have one value for the variable.
+
+tmean.within.days.before.trapping=
+  
+  lapply(c(1:nrow(traps.res)), function(x)
+    
+    # get the mean 
+    mean(
+      
+      #of the daily mean temperature 
+      as.numeric(tmean[tmean$trap_id==traps.res$Trap_ID[x], # subset the row corresponding to the current trap in trap.res based on the IDs
+                       
+                       # select the tmean from x days prior the current trap was set
+                       c(traps.res[traps.res$Trap_ID==traps.res$Trap_ID[x],]$days.since- days.before.trapping[2]): 
+                         
+                         # up to x days before the trap was set  
+                         c(traps.res[traps.res$Trap_ID==traps.res$Trap_ID[x],]$days.since-     
+                             days.before.trapping[1])])))  
+
+# Save the file to link data to final dataset
+file_name <- "tmean_specific_period_all_traps.rds" # Specify file name for saved file
+output_file <- file.path(working.directory, base_dir, file_name) # Construct the full path for the output file
+saveRDS(tmean.within.days.before.trapping, output_file) # Save the RDS file
+
+```
+
+4b) Precipitation
+```{r}
+
+# For mean precipitation, a time-lag of 1-40 days prior to collection date is used. 
+days.before.trapping=c(1,40)  # the first element in this vector is the closest day prior to the day the trap was set. 
+                              # The second element is the furthest day prior to the day the trap was set.
+
+
+
+# This code will average the mean precipitation values for days 1 through 40 prior to trapping in the 
+# 5 km grid cell that each trap is located, so that each trap will have one value for the variable.
+
+precip.within.days.before.trapping=
+  
+  lapply(c(1:nrow(traps.res)), function(x)
+    
+    # get the mean 
+    mean(
+      
+      #of the daily mean precipitation 
+      as.numeric(precip[precip$trap_id==traps.res$Trap_ID[x], # subset the row corresponding to the current trap in trap.res based on the IDs
+                        
+                        # select the tmean from x days prior the current trap was set
+                        c(traps.res[traps.res$Trap_ID==traps.res$Trap_ID[x],]$days.since- days.before.trapping[2]): 
+                          
+                          # up to x days before the trap was set  
+                          c(traps.res[traps.res$Trap_ID==traps.res$Trap_ID[x],]$days.since- days.before.trapping[1])])))  
+
+
+# Save the file to link data to final dataset
+file_name <- "precip_specific_period_all_traps.rds" # Specify file name for saved file
+output_file <- file.path(working.directory, base_dir, file_name) # Construct the full path for the output file
+saveRDS(precip.within.days.before.trapping, output_file) # Save the RDS file
+
+```
+
+4c) Snow water equivalent
+```{r}
+
+# For snow water equivalent, a time-lag of 90-120 days prior to collection date is used. 
+days.before.trapping=c(90,120)   # the first element in this vector is the closest day prior to the day the trap was set. 
+                                 # The second element is the furthest day prior to the day the trap was set.
+
+
+# This code will average the mean snow water equivalent values for days 90 through 120 prior to trapping in the 
+# 5 km grid cell that each trap is located, so that each trap will have one value for the variable.
+snow.within.days.before.trapping=
+  
+  lapply(c(1:nrow(traps.res)), function(x)
+    
+    # get the mean 
+    mean(
+      
+      #of the daily snow water equivalent 
+      as.numeric(snow[snow$trap_id==traps.res$Trap_ID[x], # subset the row corresponding to the current trap in trap.res based on the IDs
+                      
+                      # select the snow water equivalent from x days prior the current trap was set
+                      c(traps.res[traps.res$Trap_ID==traps.res$Trap_ID[x],]$days.since- days.before.trapping[2]): 
+                        
+                        # up to x days before the trap was set  
+                        c(traps.res[traps.res$Trap_ID==traps.res$Trap_ID[x],]$days.since- days.before.trapping[1])])))  
+
+
+# Save the file to link data to final dataset
+file_name <- "snow_specific_period_all_traps.rds" # Specify file name for saved file
+output_file <- file.path(working.directory, base_dir, file_name) # Construct the full path for the output file
+saveRDS(snow.within.days.before.trapping, output_file) # Save the RDS file
+
+```

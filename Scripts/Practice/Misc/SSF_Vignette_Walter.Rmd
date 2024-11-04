@@ -1,0 +1,79 @@
+---
+title: "Untitled"
+output: html_document
+date: "2024-03-25"
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r warning=FALSE, message=FALSE}
+library(terra)
+library(sf)
+library(FedData)
+library(tigris)
+library(amt)
+library(dplyr)
+library(lubridate)
+library(suncalc)# To get time of day
+```
+
+```{r}
+ll.crs=st_crs(4269)
+albers.crs <- st_crs(5070)
+```
+
+
+```{r pressure, echo=FALSE}
+fisher <- read.csv("Martes pennanti LaPoint New York.csv",header=T)
+fisher <- subset(fisher,fisher$tag.local.identifier == 1016)
+fisher$x <- fisher$location.long
+fisher$y <- fisher$location.lat
+fisher$id <- fisher$tag.local.identifier
+fisher <- subset(fisher, !is.na(fisher$location.lat))
+fisher$t <- as.POSIXct(fisher$timestamp,format="%Y-%m-%d %H:%M:%S")
+fisher <- subset(fisher, !is.na(fisher$t))
+dat_1 <- amt::make_track(fisher, .x=x, .y=y,.t=t,crs = sp::CRS("+init=epsg:4326")) %>%  amt::transform_coords(sp::CRS("+init=epsg:5070"))
+amt::summarize_sampling_rate(dat_1)
+
+fishdf <- st_as_sf(fisher, coords = c("x","y"),crs = ll.crs)
+fishdf <- st_transform(fishdf, albers.crs)
+bb1 <- st_bbox(fishdf)
+increment = 500
+minx=(min(bb1$xmin)-(increment))
+maxx=(max(bb1$xmax)+(increment))
+miny=(min(bb1$ymin)-(increment))
+maxy=(max(bb1$ymax)+(increment))
+ 
+my_bbox = st_bbox(c(xmin = minx, xmax = maxx, 
+                     ymin = miny, ymax = maxy),
+                   crs = 5070)
+
+AlbersSP <- st_as_sfc(my_bbox)
+plot(st_geometry(AlbersSP))
+plot(st_geometry(fishdf),add=T)
+
+land_use <- get_nlcd(template=AlbersSP, label = 'Fisher', dataset = "landcover", year= 2011, force.redo = T)
+plot(land_use)
+
+wet <- land_use
+wet <- land_use == 90
+plot(wet)
+names(wet) <- "wet"
+
+stps <- amt::track_resample(dat_1,rate = minutes(10),tolerance = seconds(60)) %>% amt::filter_min_n_burst(min_n = 3) %>% amt::steps_by_burst() %>% time_of_day(include.crepuscule = TRUE)
+
+m1 <- stps %>% amt::random_steps(n=9) %>%
+ amt::extract_covariates() %>%
+  amt::time_of_day(include.crepuscule=FALSE) %>% 
+  mutate(log_sl_ = log(sl_)) %>% fit_issf(case_ ~ wet + log_sl_ + wet:tod_end_ + log_sl_:tod_end_ + strata(step_id_))
+m1
+
+m1 <-stps%>%amt::random_steps(n=9)%>% amt::extract_covariates(wet)%>% amt::time_of_day(include.crepuscule=FALSE)%>% mutate(log_sl_ =log(sl_))-> d1
+
+m1 <-d1 %>% amt::fit_issf(case_~ wet + sl_ + wet:tod_end_+ sl_:tod_end_+ strata(step_id_)) 
+m1 <-d1 %>% amt::fit_issf(case_~ wet +log_sl_ +wet:tod_end_+ log_sl_:tod_end_+strata(step_id_)) 
+m1 <-d1 %>% amt::fit_issf(case_~ wet +log_sl_ +sl_ + wet:tod_end_+log_sl_:tod_end_+sl_:tod_end_+strata(step_id_)) 
+
+AIC(m1$model)
+summary(m1)
+```

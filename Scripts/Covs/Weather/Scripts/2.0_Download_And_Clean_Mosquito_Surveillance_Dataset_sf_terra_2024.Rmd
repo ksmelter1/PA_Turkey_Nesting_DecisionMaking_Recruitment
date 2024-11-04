@@ -1,0 +1,305 @@
+---
+title: "2.0_Download_And_Clean_Mosquito_Surevillance_Data_2024.R"
+output: html_document
+date: "2024-08-11"
+---
+
+Title:    Disease Modeling Software 
+          Script "2.0_Download_And_Clean_Mosquito_Surveillance_Dataset" for Pennsylvania, USA
+
+Authors:  Kristin J. Bondo, 
+          Diego Montecino-Latorre, 
+          W. David Walter
+         
+Date:    August 2024
+
+Disclaimer: Any use of trade, firm, or product names is for descriptive purposes 
+            only and does not imply endorsement by the U.S. Government.
+ 
+Description: This script allows the user to download and clean raw mosquito surveillance data from the Department of Environmental Protection (DEP),
+which is available at https://gis.dep.pa.gov/WNV/index.html. It also plots the positive and negative data so that the data can be visualized throughout 
+the study area. To download the data, click on the link, "Mosquito Testing Data." The downloaded dataset consists of mosquito traps placed throughout  Pennsylvania from 2001-2020. Attributes of the datset include collection date, trap type, mosquito count, mosquito species based on taxonomic classification, pathogen tested, test type, test result, a unique id (USI), latitude, and longitude. Further attribute information can be gained from the "USI". For example, in the USI (035180179A125-01), "035180179" is the sample id of the trap set on a particular date, "A125" is a code that corresponds to the mosquito species, and "-01" is a number assigned to the pool of up to 100 mosquitos of the same species from the trap that were tested for a particular pathogen. The "-01" indicates it is the first pool tested. 
+
+Prior to being imported into R, the file was cleaned manually in Excel by deleting records that were placed into the wrong attribute columns due to missing GPS coordinates. The data are reported from the DEP such that observations of mosquitoes collected from the same trap are separated to mosquito species and counted into pools of up to 100 mosquitoes each. The pools were then tested for various pathogens, including West Nile virus.
+
+This script further cleans and prepares the data for analysis by binding the yearly datasets, subsetting by various attributes, creating a unique id 
+based on attributes of interest, recoding the outcome variable as 0 and 1, and summing up testing results over multiple pools and mosquito species. 
+For the analysis in this software, we are interested in modeling West Nile virus testing result as the outcome during the years 2018-2020. Culex restuans and Culex pipiens are the primary vectors of this pathogen and are caught in gravid traps, so the data are cleaned and further subset based on these attributes. The majority of observations of Culex restuans and Culex pipiens were not distinguished to species from 2018-2020 and were recorded as being "Culex pipiens-restuans", so we included these observations in the analysis. The final dataset consists of one (positive or negative) testing result of West Nile virus per trap set on a given date and location. The testing results from Culex restuans and Culex pipiens-restuans per trap were pooled together and classified to be positive if at least one testing result from the trap was positive.
+
+This code was written under 
+R version 4.3.0 (2023-04-21) -- "Already Tomorrow"
+Copyright (C) 2023 The R Foundation for Statistical Computing
+Platform: x86_64-apple-darwin20 (64-bit)
+
+---
+
+Set-up: Set the working directory on your computer to the location that you would like to store the downloaded files, generate the dataset, and run the models.
+```{r}
+
+#For mac
+mac_path <- "/your_working_directory"  #Change code to the working directory on your computer
+set_working_directory(mac_path)
+
+#For PC
+pc_path <- "C:/your_working_directory" #Change code to the working directory on your computer
+set_working_directory(pc_path)
+
+# Define working directory
+working.directory <- getwd() # Set working directory
+
+```
+
+Set-up: If not done previously, run the project set-up code below to make folders and sub-folders to organize and save data in subsequent scripts.
+```{r}
+
+# 0/ Specify overall project folder "Spatial_Disease_Modeling" to contain project files                                           
+dir.create(paste0(getwd(),"/Spatial_Disease_Modeling"))
+
+# 1/ Make a sub-folder "1_Raw_Data" to store downloaded raw spatial data 
+folder1 <- "Spatial_Disease_Modeling/1_Raw_Data"
+dir.create(file.path(working.directory, folder1), recursive=TRUE)
+
+# 2/ Make a sub-folder "2_Spatial_Data_Ready_To_Use" to store the rasters with desired resolution that will be used in the modeling #
+folder2 <- "Spatial_Disease_Modeling/2_Spatial_Data_Ready_To_Use"
+dir.create(file.path(working.directory, folder2), recursive=TRUE)
+
+# 3/ Make a sub-folder "3_Data_Set_Prep" to store a copy of the cleaned data and extracted spatial data to attach to the dataset #
+folder3 <- "Spatial_Disease_Modeling/3_Data_Set_Prep"
+dir.create(file.path(working.directory, folder3), recursive=TRUE)
+
+# 4/ Make a sub-folder "4_Run_INLA_Model" to store saved output of INLA models #
+folder4 <- "Spatial_Disease_Modeling/4_Run_INLA_Models"
+dir.create(file.path(working.directory, folder4), recursive=TRUE)
+
+# 5/ Make a sub-folder "5_Predict_Surface" to store saved output of INLA models #
+folder5 <- "Spatial_Disease_Modeling/5_Predict_Surface"
+dir.create(file.path(working.directory, folder5), recursive=TRUE)
+
+# 6/ Make a sub-folder "6_Visualize_in_Shiny" to store saved output of INLA models #
+folder6 <- "Spatial_Disease_Modeling/6_Visualize_in_Shiny"
+dir.create(file.path(working.directory, folder6), recursive=TRUE)
+
+```
+
+Set-Up: Check to see if required libraries are installed. If not, they will be installed.
+```{r}
+
+# List of required libraries
+required_libraries <- c("readxl", "reshape2", "dplyr", "data.table", "sf", "tigris")
+
+# Function to check and install missing libraries
+install_if_missing <- function(libraries) {
+  for (lib in libraries) {
+    if (!require(lib, character.only = TRUE)) {
+      install.packages(lib, dependencies = TRUE)
+    }
+  }
+}
+
+# Install libraries
+install_if_missing(required_libraries)
+
+```
+
+Set-up: Load packages after they are installed on your machine.
+```{r}
+
+library("readxl")
+library("reshape2")
+library("dplyr")
+library("data.table")
+library("sf")
+library("tigris")
+```
+
+1) Import, clean and prepare the DEP dataset to analyze West Nile virus occurrence in vector species of interest 
+```{r}
+# Import the DEP raw data from location of the raw data where the mosquito data is saved.
+DEP_2018 <- read_excel("Mosquito Testing Data 2018 Through 2020.xlsx",sheet="2018") # Year 2018 data
+DEP_2019 <- read_excel("Mosquito Testing Data 2018 Through 2020.xlsx",sheet="2019") # Year 2019 data
+DEP_2020 <- read_excel("Mosquito Testing Data 2018 Through 2020.xlsx",sheet="2020") # Year 2020 data
+
+# Combine datasets for years of interest (2018-2020)
+All <- rbind(DEP_2018, DEP_2019, DEP_2020)
+# There are 45652 observations
+
+# Subset based on observations that were tested for the "WNV" pathogen
+All_1 <- All[All$PATHOGEN=="WNV",]   # Retains observations of "WNV" in dataset
+
+# Subset based on observations where the traps used were "Gravid"
+All_1 <- All_1[All_1$TRAP=="Gravid",] # Retains observations of "Gravid" in dataset
+
+# Subset and remove all observations where mosquito species were classified to species other than Cx. restuans, Cx. pipiens, and Cx. pipiens-restuans
+
+# List table of all species in dataset, so it can be determined which species to remove
+table(All_1$SPECIES) 
+
+#Remove species from dataset that are not of interest
+All_1 <- subset(All_1, All_1$SPECIES !="Ae albopictus")     
+All_1 <- subset(All_1, All_1$SPECIES !="Cx erraticus")      
+All_1 <- subset(All_1, All_1$SPECIES !="Cx salinarius")     
+All_1 <- subset(All_1, All_1$SPECIES !="Cx spp.")           
+All_1 <- subset(All_1, All_1$SPECIES !="Cx territans")
+All_1 <- subset(All_1, All_1$SPECIES !="Oc japonicus japonicus")
+
+# Check to make sure they have been removed
+table(All_1$SPECIES) 
+# There are 43282 observations
+
+# Make a unique ID for each trap observation based on collection date and lat/long columns 
+All_1$Unique_ID <- paste(All_1$COLLECTED, All_1$LONGITUDE, All_1$LATITUDE, sep="_")
+
+# Recode Unique_ID column as an intger that is easier to comprehend and to correspond to a unique trap ID based on date and geograpgic location
+All_3<- transform(All_1, ID=match(Unique_ID, unique(Unique_ID)))
+
+# As a check-point, code from lines 160-164 is run to ensure that the numbers in the USI (035180179A125-01), "035180179" also correspond to the same trap ID that was #determined using date and lat/long
+
+# Remove characters from USI column to make a new column that will correspond to the trap ID called "USI_1"by removing last seven characters of USI, which corresponds to the mosquito pool number and the code for mosquito species
+LC1 <- All_3 # Copy original dataset
+LC2 <- substr(LC1$USI, 1, nchar(LC1$USI)-7)
+
+# Add these values to the original dataset and name "Trap_ID"
+LC1$Trap_ID <- LC2
+
+# Recode "RESULT" column for West Nile virus from character to integer values of 0's and 1's
+LC1$Result_1[LC1$RESULT == "NEG"]="0"
+LC1$Result_1[LC1$RESULT == "POS"]="1"
+LC1$Result_1=as.integer(LC1$Result_1)
+
+# Check to make sure there are no missing values 
+table(LC1$Result_1) 
+
+# For the dataset, we prepare it for the analysis so that there is only one West Nile virus testing value per trap set on the same date and location. # # This is done by identifying testing results from the same traps and mosquito species that need to be summed together by modifying the "USI" 
+# First, remove dashes from USI column to make new column "USI_1", which corresponds to testing results from multiple pools of the same species from each trap
+LC3 <- substr(LC1$USI, 1, nchar(LC1$USI)-3)
+LC1$USI_1 <- LC3
+
+# Then sum up the values of "Result_1" column 
+LC4 <- transform(LC1, Result1=ave(Result_1, USI_1, FUN=sum))[-2]
+
+# Now, each trap observation from the same date and location has only one testing result for each species 
+
+# There are now duplicate records, so keep only one record based on "USI_1"
+LC5 <- LC4 %>% distinct(USI_1, .keep_all = TRUE)
+
+# Summing up positive values for the testing results has resulted in values > 1. 
+# If values are > 1 for "Result_1" column, recode those values as 1 and reclassify as integer  
+LC5$Result_2 <- LC5$Result1
+LC5$Result_2[LC5$Result1 > 1] ="1"
+LC5$Result_2=as.integer(LC5$Result_2)
+```
+
+2) After visualizing the data and running the data exploration code at the bottom of this script, we decided to remove observations that have been identified as being Cx. pipiens from the analyis because this species primarily lives in urban areas and we are primarily interested in West Nile virus occurrence in forest habitats.
+```{r}
+
+# Remove mosquitoes identified as being Cx. pipiens from the dataset
+LC10 <- subset(LC5, LC5$SPECIES !="Cx pipiens")
+
+# Find duplicate records based on "Trap_ID" that were set on the same date and location
+find_dupes <- LC10 %>% group_by(Trap_ID) %>% count() %>% filter(n >1)
+# There are 340 duplicate values based on trap id, which are the traps where there are observations of Cx. restuans-pipiens and Cx. restuans
+
+# Sum up West Nile virus testing results from traps that contain both Cx. restuans-pipiens and Cx. restuans to obtain only one result per trap.
+LC10$Result_3 <- LC10$Result_2
+
+LC10 <- transform(LC10, Result_3=ave(Result_3, Trap_ID, FUN=sum))
+
+# Remove duplicate values of Trap_ID and retain only one value
+LC11 <- LC10 %>% distinct(Trap_ID, .keep_all = TRUE)
+
+#If values are > 1 for "Result_3" column, recode those values as 1 and reclassify as integer  
+LC11$WNV_Result <- LC11$Result_3
+LC11$WNV_Result[LC11$WNV_Result > 1] ="1"
+LC11$WNV_Result=as.integer(LC11$WNV_Result)
+
+# Maker sure the duplicates based on Trap_ID have been removed
+find_dupes <- LC11 %>% group_by(Trap_ID) %>% count() %>% filter(n >1)
+# There are 0 duplicates
+
+# Add a month column
+LC11$month=month(LC11$COLLECTED) 
+
+# Add a year column
+LC11$year=year(LC11$COLLECTED) 
+
+# Remove traps from October, November, and December 
+LC11 <- LC11[!(LC11$month==10),]
+LC11 <- LC11[!(LC11$month==11),]
+LC11 <- LC11[!(LC11$month==12),]
+# There are 29132 total observations in the final dataset
+
+# Plot the final West Nile virus testing results over a template of the study area
+template <- st_read("PA_outline.shp") # Import a shapefile of Pennsylvania, the study area
+plot(st_geometry(template)) 
+points_sf <- st_as_sf(LC11, coords = c("LONGITUDE", "LATITUDE"), crs = 4326) # Plot positives and negatives over template of the study area
+positive_sf <- subset(points_sf, WNV_Result == "1") # Subset positive results
+negative_sf <- subset(points_sf, WNV_Result == "0") # Subset negative results
+plot(st_geometry(template)) # Plot the template layer
+plot(st_geometry(positive_sf), add = TRUE, pch = 16, col = "red", cex = 1) # Add positive points
+plot(st_geometry(negative_sf), add = TRUE, pch = 16, col = "black", cex = 0.5) # Add negative points
+
+# Retain attribute data for the final dataset
+Final_data <- LC11[,c(1:3, 6:7, 10:11,14,20)]
+# There are 29132 observations
+
+# Define the base directory to save file
+base_dir <- "/Spatial_Disease_Modeling/3_Data_Set_Prep"
+
+# Define the file name
+file_name <- "WNV_data_cleaned.rds"
+
+# Construct the full file path
+file_path <- file.path(working.directory, base_dir, file_name)
+
+# Save the cleaned data set
+saveRDS(Final_data, file = file_path)
+
+```
+
+Data exploration: Code to plot maps of WNV results according to each mosquito species
+```{r}
+
+# Define the base CRS
+crs <- st_crs(4326)  # EPSG code for WGS84
+
+# Plot All Culex
+LC5_sf <- st_as_sf(LC5, coords = c("LONGITUDE", "LATITUDE"), crs = crs)
+positive_all <- subset(LC5_sf, Result_2 == "1")
+negative_all <- subset(LC5_sf, Result_2 == "0")
+plot(st_geometry(template), main = "All Culex")  # Plot template
+plot(st_geometry(positive_all), pch = 16, col = "red", cex = 1, add = TRUE)  # Plot positive points
+plot(st_geometry(negative_all), pch = 16, col = "black", cex = 0.5, add = TRUE)  # Plot negative points
+
+# Plot Cx. pipiens
+LC6_sf <- subset(LC5_sf, SPECIES == "Cx pipiens")
+positive_pipiens <- subset(LC6_sf, Result_2 == "1")
+negative_pipiens <- subset(LC6_sf, Result_2 == "0")
+plot(st_geometry(template), main = "Cx. pipiens")  # Plot template
+plot(st_geometry(positive_pipiens), pch = 16, col = "red", cex = 1, add = TRUE)  # Plot positive points
+plot(st_geometry(negative_pipiens), pch = 16, col = "black", cex = 0.5, add = TRUE)  # Plot negative points
+
+# Plot Cx. restuans
+LC7_sf <- subset(LC5_sf, SPECIES == "Cx restuans")
+positive_restuans <- subset(LC7_sf, Result_2 == "1")
+negative_restuans <- subset(LC7_sf, Result_2 == "0")
+plot(st_geometry(template), main = "Cx. restuans")  # Plot template
+plot(st_geometry(positive_restuans), pch = 16, col = "red", cex = 1, add = TRUE)  # Plot positive points
+plot(st_geometry(negative_restuans), pch = 16, col = "black", cex = 0.5, add = TRUE)  # Plot negative points
+
+# Plot Cx. restuans and Cx. pipiens-restuans
+LC8_sf <- subset(LC5_sf, SPECIES != "Cx pipiens")
+positive_rest_pip <- subset(LC8_sf, Result_2 == "1")
+negative_rest_pip <- subset(LC8_sf, Result_2 == "0")
+plot(st_geometry(template), main = "Cx. restuans and Cx. pipiens-restuans")  # Plot template
+plot(st_geometry(positive_rest_pip), pch = 16, col = "red", cex = 1, add = TRUE)  # Plot positive points
+plot(st_geometry(negative_rest_pip), pch = 16, col = "black", cex = 0.5, add = TRUE)  # Plot negative points
+
+# Plot Cx. pipiens-restuans
+LC9_sf <- subset(LC5_sf, SPECIES == "Cx pipiens-restuans")
+positive_rest_pip1 <- subset(LC9_sf, Result_2 == "1")
+negative_rest_pip1 <- subset(LC9_sf, Result_2 == "0")
+plot(st_geometry(template), main = "Cx. pipiens-restuans")  # Plot template
+plot(st_geometry(positive_rest_pip1), pch = 16, col = "red", cex = 1, add = TRUE)  # Plot positive points
+plot(st_geometry(negative_rest_pip1), pch = 16, col = "black", cex = 0.5, add = TRUE)  # Plot negative points
+
+```

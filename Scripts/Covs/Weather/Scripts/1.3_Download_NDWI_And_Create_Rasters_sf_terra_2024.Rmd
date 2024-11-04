@@ -1,0 +1,368 @@
+---
+title: "1.3_Download_NDWI_and_Create_Rasters_sf_terra_2024.R"
+output: html_document
+date: "2024-08-10"
+---
+
+Title:    Disease Modeling Software 
+          Script "1.3_Download_NDWI_And_Create_Rasters_PC_sf_terra" for Pennsylvania, USA
+
+Authors:  Kristin J. Bondo, 
+          Diego Montecino-Latorre, 
+          W. David Walter
+         
+Date:     August 2024
+
+Disclaimer: Any use of trade, firm, or product names is for descriptive purposes 
+            only and does not imply endorsement by the U.S. Government.
+
+Description: This script allows the user to use downloaded Normalized Difference Water Index (NDWI) files and make rasters over approximately 1 week (8 days) for each year at 5 km resolution of the study area, which is Pennsylvania in this example. The NDWI is constructed using a Modifded Normalized Water Index using reflectance bands 4 and 6 in MODIS. Reflectance bands 4 and 6 need to be manually downloaded from the APPEEARS website at (https://lpdaacsvc.cr.usgs.gov/appeears) using a shapefile of the study area. You will need to create a free account with APPEEARS to download the data.
+
+To locate the product, navigate to the APPEERS webpage click on "Extract" at the top of the page and then "Area" in the arrow drop-down menu. Start a new request. Enter a name to identify the request, upload a file of the shapefile of the study area of the area of interest, and enter the start and end dates of the data being requested for this example. For start, enter "01-01-2017" and for end, enter "12-31-2020. Check the box that says, "Is Data Recurring". For the selected layers, type in "Terra MODIS in the "Search for a product" box, and select product, "Terra MODIS Surface Reflectance Bands 1-7, MODO9A1.061, 500m, 8 day, (2000-02-24 to Present). Below that, click on the plus sign next to "sur_refl_b04" and "sur_refl_b06" to add them to the "Selected Areas" box. For the projection, select, "MODIS Sinusoidal". Select "GeoTiff" as the file format. Then submit request at the bottom of the page. When the downloaded files are ready, APPEARS will send you a link to download the data (555 files) to the email address you registered when you created your account. 
+
+Copy and paste the files into the "NDWI_RAW" folder generated in the first section of this script. Save the downloaded files to a location with a large amount of storage space because these files are large when downloaded over large extents.
+
+This code was written under 
+R version 4.2.1 (2022-06-23) -- "Funny-Looking Kid"
+Copyright (C) 2020 The R Foundation for Statistical Computing
+Platform: x86_64-apple-darwin17.0 (64-bit)
+---
+
+Set-up: Set the working directory on your computer to the location that you would like to store the downloaded files, generate the dataset, and run the models.
+```{r}
+
+#For mac
+mac_path <- "~/your_working_directory"  #Change code to the working directory on your computer
+set_working_directory(mac_path)
+
+#For PC
+pc_path <- "C:/your_working_directory" #Change code to the working directory on your computer
+set_working_directory(pc_path)
+
+# Define working directory
+working.directory <- getwd() # Set working directory
+
+```
+
+Set-up: If not done previously, run the project set-up code below to make folders and sub-folders to organize and save data in subsequent scripts.
+```{r}
+
+# 0/ Specify overall project folder "Spatial_Disease_Modeling" to contain project files                                           
+dir.create(paste0(getwd(),"/Spatial_Disease_Modeling"))
+
+# 1/ Make a sub-folder "1_Raw_Data" to store downloaded raw spatial data 
+folder1 <- "Spatial_Disease_Modeling/1_Raw_Data"
+dir.create(file.path(working.directory, folder1), recursive=TRUE)
+
+# 2/ Make a sub-folder "2_Spatial_Data_Ready_To_Use" to store the rasters with desired resolution that will be used in the modeling #
+folder2 <- "Spatial_Disease_Modeling/2_Spatial_Data_Ready_To_Use"
+dir.create(file.path(working.directory, folder2), recursive=TRUE)
+
+# 3/ Make a sub-folder "3_Data_Set_Prep" to store a copy of the cleaned data and extracted spatial data to attach to the dataset #
+folder3 <- "Spatial_Disease_Modeling/3_Data_Set_Prep"
+dir.create(file.path(working.directory, folder3), recursive=TRUE)
+
+# 4/ Make a sub-folder "4_Run_INLA_Model" to store saved output of INLA models #
+folder4 <- "Spatial_Disease_Modeling/4_Run_INLA_Models"
+dir.create(file.path(working.directory, folder4), recursive=TRUE)
+
+# 5/ Make a sub-folder "5_Predict_Surface" to store saved output of INLA models #
+folder5 <- "Spatial_Disease_Modeling/5_Predict_Surface"
+dir.create(file.path(working.directory, folder5), recursive=TRUE)
+
+# 6/ Make a sub-folder "6_Visualize_in_Shiny" to store saved output of INLA models #
+folder6 <- "Spatial_Disease_Modeling/6_Visualize_in_Shiny"
+dir.create(file.path(working.directory, folder6), recursive=TRUE)
+
+```
+
+Set-Up: Check to see if required libraries are installed. If not, they will be installed.
+```{r}
+
+# List of required libraries
+required_libraries <- c("foreach","tigris", "sf", "fasterize", "terra")
+
+# Function to check and install missing libraries
+install_if_missing <- function(libraries) {
+  for (lib in libraries) {
+    if (!require(lib, character.only = TRUE)) {
+      install.packages(lib, dependencies = TRUE)
+    }
+  }
+}
+
+# Install libraries
+install_if_missing(required_libraries)
+
+```
+
+Set-up: Load packages after they are installed on your machine.
+```{r}
+
+library(foreach)
+library(tigris)
+library(sf)
+library(fasterize)
+library(terra)
+
+```
+
+1) Import previously downloaded raw NDWI files.                                       
+```{r}
+
+# Define working directory and base directory
+subfolder7 <- "Spatial_Disease_Modeling_Previous"
+base_dir <- file.path(working.directory, subfolder7, "1_Raw_Data")
+
+# Define the folder where raw NDWI files are stored
+ndwi_raw_dir <- file.path(base_dir, "NDWI_Raw")
+
+# Read raw files
+files <- list.files(ndwi_raw_dir, full.names = TRUE)
+
+# Identify the SWIR (Band 6) and Green (Band 4) files
+band_6 <- grep("b06", files, value = TRUE) # SWIR 
+band_4 <- grep("b04", files, value = TRUE) # Green 
+
+
+# swir: refers to short-wave infrared: 1.4–3 μm  (band 6 or 7)
+# near-infrared: 0.75 - 1.4. This would be band 5
+# green:  560–520 nm. This would be band 4
+
+
+# Extract the DOY (Day of Year) part from the filenames
+extract_name <- function(filename) {
+  parts <- strsplit(basename(filename), "_")[[1]]
+  if (length(parts) >= 5) {
+    doy_part <- parts[5]
+    doy <- strsplit(doy_part, "doy")[[1]]
+    if (length(doy) == 2) {
+      return(doy[2])
+    }
+  }
+  return(NA)
+}
+
+# Store names as vector of names corresponding to the NDWI bands
+names_ndwi <- sapply(band_6, extract_name)
+
+```
+
+2) Prepare the NDWI rasters by correcting the NDWI values based on, https://lpdaac.usgs.gov/products/mod09a1v006, which clamps values of -100 or lower to -100.
+```{r}
+
+# Create subfolders and directories for folders to save NDWI data
+prep_folder <- "Spatial_Disease_Modeling/1_Raw_Data/NDWI_Prep"
+dir.create(file.path(working.directory, prep_folder), recursive = TRUE)
+
+extracted_folder <- "Spatial_Disease_Modeling/1_Raw_Data/NDWI_Prep/NDWI_Extracted"
+dir.create(file.path(working.directory, extracted_folder), recursive = TRUE)
+
+clumped_folder <- "Spatial_Disease_Modeling/1_Raw_Data/NDWI_Prep/NDWI_Clumped"
+dir.create(file.path(working.directory, clumped_folder), recursive = TRUE)
+
+final_folder <- "Spatial_Disease_Modeling/1_Raw_Data/NDWI_Prep/NDWI_Final"
+dir.create(file.path(working.directory, final_folder), recursive = TRUE)
+
+
+# Read in SWIR and Green bands
+swir_band <- lapply(band_6, rast)
+green_band <- lapply(band_4, rast)
+
+# Function to clamp values in rasters of -100 or lower to -100
+clamp_nas <- function(r) {
+  clamp(r, lower = -100, values = FALSE)
+}
+
+# Apply the function to correct values
+swir_band <- lapply(swir_band, clamp_nas)
+green_band <- lapply(green_band, clamp_nas)
+
+# Multiply values by the scaling factor
+scaling_factor <- 0.0001
+swir_band <- lapply(swir_band, function(x) x * scaling_factor)
+green_band <- lapply(green_band, function(x) x * scaling_factor)
+
+# Define a function to calculate NDWI modified following Xu: Modification of NDWI.This index is calculated as: green - MIR/ green + MIR
+# where MIR is Band 5 Near-Infrared (1.55 - 1.75 µm) in Landstat:
+# https://www.usgs.gov/land-resources/nli/landsat/landsat-5?qt-science_support_page_related_con=0#qt-science_support_page_related_con 
+# In the equation, r1 and r2 correspond to each of the green-band and SWIR bands, respectively, using equation NDWI = r1 - r2/(r1 + r2).
+
+ndwi_fun <- function(r1, r2) {
+  denominator <- (r1 + r2)
+  ndwi <- (r1 - r2) / denominator
+  ndwi[is.nan(ndwi) | is.infinite(ndwi)] <- 0 # This line cleans up the raster and replaces NA or infinite values of the raster with 0.
+  return(ndwi)
+}
+
+# Apply the function over each pair of raster layers and assign names to the rasters
+ndwi_over_time <- Map(ndwi_fun, green_band, swir_band) # Map is used to apply the function to two lists simultaneously
+names(ndwi_over_time) <- names_ndwi
+
+# Stack the NDWI raster layers
+stacked_ndwi <- rast(ndwi_over_time)
+
+# Save names_ndwi and open the R session in the cluster again for large data sets due to memory issues
+saveRDS(names_ndwi, file.path(working.directory, prep_folder, "names_ndwi.RDS"))
+
+# Prepare file names
+output_files <- file.path(working.directory, extracted_folder, paste0("ndwi_b4_b6_", names_ndwi, ".tif"))
+
+# Loop over each layer and write to disk separately
+for (i in 1:nlyr(stacked_nwdi)) {
+  writeRaster(stacked_nwdi[[i]], filename = paste0(output_files[i]), overwrite = TRUE)
+}
+
+# Prepare NDWI rasters so that values of the raster are within the range of -1 and +1
+
+#Read back in names_ndwi for really large datasets
+file_path <- file.path(working.directory, prep_folder, "names_ndwi.RDS")
+names_ndwi <- readRDS(file_path)
+
+nwdi_over_time_PA_2018_2020 <- lapply(names_ndwi, function(x) {
+  file_path <- file.path(working.directory, extracted_folder, paste0("ndwi_b4_b6_", x, ".tif"))
+  rast(file_path)
+})
+
+
+# This line of code ensures that any values less than -1 in the raster are set to -1 by clamping them. This operation removes or adjusts extreme negative values in the NDWI dataset.
+
+ndwi_clumped <- foreach(i = seq_along(nwdi_over_time_PA_2018_2020), .packages = "terra") %do% {
+  clamp(nwdi_over_time_PA_2018_2020[[i]], lower = -1)
+}
+
+# Save clamped rasters 
+for (i in seq_along(ndwi_clumped)) {
+  file_path <- file.path(working.directory, clumped_folder, paste0("ndwi_clumped_first_b4_b6_", names_ndwi[i], ".tif"))
+  writeRaster(ndwi_clumped[[i]], filename = file_path, overwrite = TRUE)
+}
+
+# List directory to read in files
+full_directory <- file.path(working.directory, clumped_folder)
+files <- list.files(full_directory)
+
+ndwi_clamped <- lapply(files, function(x) {
+  file_path <- file.path(full_directory, x)
+  rast(file_path)
+})
+
+# This line of code sets an upper bound of 1 on the values of the NDWI rasters by clamping them so that no values exceed 1.
+ndwi_clamped1 <- foreach(r = ndwi_clamped, .packages = "terra") %do% {
+  clamp(r, upper = 1)
+}
+
+# Save the clamped rasters that are within the bounds of -1 and 1.
+for (i in seq_along(ndwi_clamped1)) {
+  file_path <- file.path(working.directory, final_folder, paste0("ndwi_final_b4_b6_", names_ndwi[i], ".tif"))
+  writeRaster(ndwi_clamped1[[i]], filename = file_path, overwrite = TRUE)
+}
+
+```
+
+3) Create weekly NDWI rasters with 5 km resolution using template of the study area.
+```{r}
+
+# Create template grid polygon of 5km resolution of the study area
+
+states <- tigris::states(resolution = "5m",
+                         class = "sf",
+                         progress_bar = FALSE)
+
+PA=states[states$STUSPS=="PA",]
+
+
+template=st_buffer(st_transform(PA, st_crs(6562)), dist = 10000) # template 10 km out of PA borders
+
+# Create raster of specified resolution and projection
+
+# Chosen resolution:
+resolution=5000
+
+ex <- as.vector(ext(template))
+
+#Raster and Terra packages generate rasters differently. Raster adjusts ymin whereas terra adjusts ymax. Both adjust xmax. We calculate the extent to be same to how Raster package calculates it.
+
+# Adjust xmax as both Raster and Terra Packages adjust
+ncols <- (ex[2] - ex[1]) / resolution
+ncols <- floor(ncols)  # Ensure whole number of columns
+adjusted_xmax <- ex[1] + (ncols * resolution)  # Adjust xmax
+
+# Adjust ymin as Raster package adjusts
+nrows_raster <- (ex[4] - ex[3]) / resolution
+nrows_raster <- floor(nrows_raster)  # Ensure whole number of rows
+adjusted_ymin_raster <- ex[4] - (nrows_raster * resolution)  # Adjust ymin
+
+#Generate raster to be same extent as raster package
+grid.template <- rast(ext(ex[1], adjusted_xmax, adjusted_ymin_raster, ex[4]), 
+                      res = resolution,
+                      crs = "EPSG:6562") # nad83.2011.pa.north
+
+#Generate raster using default method used by Terra package
+#grid.template <-  rast(ext(template), 
+                  #res = c(resolution),
+                  #crs = "EPSG:6562") #nad83.2011.pa.north
+
+
+# Move template grid to a spatial object (before it was a empty raster)
+gridPolygon <- as.polygons(grid.template)
+gridPolygon_sf <- st_as_sf(gridPolygon)
+
+# Subset the grid by the box created around PA. Now template is the gridpolygon 
+template <- st_intersection(gridPolygon_sf, template)
+
+# Add cell ID
+templatelayer=c(1:nrow(template))
+colnames(template)[1]="cell_number"
+nrow(template) # 5546 cells.  
+
+# Check point: plot the template, PA
+plot(st_geometry(template))
+plot(st_geometry(st_transform(PA, st_crs(6562))), add=T, border="red", lwd=2)
+
+# Read in NDWI rasters into R
+
+#Define the filepath
+final_directory <- file.path(working.directory, final_folder)
+
+# List files to the final directory
+files <- list.files(final_directory)
+
+# Filter filenames that match the pattern and construct the full paths
+paths <- file.path(final_directory, grep("ndwi_final_b4_b6_", files, value = TRUE))
+
+ndwi.per.year <- lapply(paths, rast)
+
+# Reproject the raster as nad83.2011.pa.north and with the desired larger resolution
+ndwi.repro.5km <- lapply(ndwi.per.year, function(y) project(y, grid.template, method = 'bilinear'))
+
+# Mask to the extent of the study area
+template_raster <- terra::rasterize(template, ndwi.repro.5km[[1]])
+ndwi.masked <- lapply(ndwi.repro.5km, function(r) terra::mask(r, template_raster))
+
+#Create subfolder and directory to save the files
+subfolder8 <- "Spatial_Disease_Modeling/2_Spatial_Data_Ready_To_Use/NDWI_5KM_Rasters"
+dir.create(file.path(working.directory, subfolder8))
+
+# Write final 5km NDWI rasters to disk
+for (i in seq_along(ndwi.masked)) {
+  file_path <- file.path(working.directory,subfolder8, paste0("ndwi_5km_b4_b6_", names_ndwi[i], ".tif"))
+  writeRaster(ndwi.masked[[i]], filename = file_path, overwrite = TRUE)
+}
+
+```
+
+Checkpoint: Plot a single 5km raster with the template grid of the study area. 
+```{r}
+
+# Define path to raster
+raster_path <- file.path(working.directory, subfolder8, "ndwi_5km_b4_b6_2016361.tif")
+
+# Load the raster file directly using the full path
+newtest <- rast(raster_path)
+
+plot(newtest)
+plot(template, col=NA, add=T)
+PA_transformed <- st_transform(PA, st_crs(6562))
+plot(st_geometry(PA_transformed), add=T, border="white")
+
+```
